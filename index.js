@@ -52,16 +52,21 @@ app.get('/webhook', (req, res) => {
 app.post('/webhook', async (req, res) => {
   // Rispondiamo subito 200 a Meta, per non far scadere la richiesta.
   res.sendStatus(200);
+  console.log('--- Webhook ricevuto ---', JSON.stringify(req.body));
 
   try {
     const entry = req.body.entry?.[0];
     const change = entry?.changes?.[0];
     const messaggio = change?.value?.messages?.[0];
 
-    if (!messaggio) return; // notifica di stato (letto/consegnato), non un messaggio vero
+    if (!messaggio) {
+      console.log('Nessun messaggio nel payload (probabile notifica di stato, es. "letto").');
+      return;
+    }
 
     const telefonoCliente = messaggio.from; // es. "50588881234"
     const testo = (messaggio.text?.body || '').trim();
+    console.log(`Messaggio da ${telefonoCliente}: "${testo}"`);
 
     await gestisciMessaggio(telefonoCliente, testo);
   } catch (errore) {
@@ -79,7 +84,7 @@ async function gestisciMessaggio(telefono, testo) {
     sessioni.set(telefono, sessione);
     await inviaMessaggioWhatsApp(
       telefono,
-      'Ciao! Benvenuto/a. Dimmi il modello che ti interessa (es. AGATHA-22) e controllo subito la disponibilita.'
+      '¡Hola! Bienvenido/a. Decime el modelo que te interesa (ej. AGATHA-22) y reviso la disponibilidad al instante.'
     );
     return;
   }
@@ -88,7 +93,7 @@ async function gestisciMessaggio(telefono, testo) {
     case 'chiedi_modello': {
       sessione.modello = testo.toUpperCase();
       sessione.step = 'chiedi_taglia';
-      await inviaMessaggioWhatsApp(telefono, `Perfetto, ${sessione.modello}. Che taglia ti serve?`);
+      await inviaMessaggioWhatsApp(telefono, `Perfecto, ${sessione.modello}. ¿Qué talla necesitás?`);
       break;
     }
 
@@ -99,15 +104,16 @@ async function gestisciMessaggio(telefono, testo) {
       if (risultato && risultato.quantitàDisponibile > 0) {
         sessione.step = 'chiedi_conferma';
         sessione.trovato = risultato;
+        const prezzo = risultato.prezzoAlPaioUSD || risultato['prezzoAlPaio (usd)'];
         await inviaMessaggioWhatsApp(
           telefono,
-          `Si, disponibile! ${sessione.modello} taglia ${sessione.taglia} — prezzo $${risultato.prezzoAlPaioUSD || risultato['prezzoAlPaio (usd)']}.\n\nVuoi che un nostro operatore ti contatti per completare l'acquisto? Rispondi SI o NO.`
+          `¡Sí, disponible! ${sessione.modello} talla ${sessione.taglia} — precio $${prezzo}.\n\n¿Querés que un vendedor te contacte para completar la compra? Respondé SI o NO.`
         );
       } else {
         sessione.step = 'chiedi_modello';
         await inviaMessaggioWhatsApp(
           telefono,
-          `Mi dispiace, al momento non abbiamo il modello ${sessione.modello} in taglia ${sessione.taglia}. Vuoi provare con un altro modello? Scrivimi il nome.`
+          `Lo siento, no tenemos el modelo ${sessione.modello} en talla ${sessione.taglia} en este momento. ¿Querés probar con otro modelo? Escribime el nombre.`
         );
       }
       break;
@@ -119,10 +125,10 @@ async function gestisciMessaggio(telefono, testo) {
         await notificaOperatoreTelegram(telefono, sessione.modello, sessione.taglia);
         await inviaMessaggioWhatsApp(
           telefono,
-          'Perfetto, un operatore ti scrivera a breve per completare l\'acquisto. Grazie!'
+          '¡Perfecto! Un vendedor te va a escribir en breve para completar la compra. ¡Gracias!'
         );
       } else {
-        await inviaMessaggioWhatsApp(telefono, 'Va bene! Se vuoi controllare un altro modello, scrivimi il nome.');
+        await inviaMessaggioWhatsApp(telefono, '¡Está bien! Si querés consultar otro modelo, escribime el nombre.');
       }
       sessione.step = 'chiedi_modello';
       break;
@@ -130,7 +136,7 @@ async function gestisciMessaggio(telefono, testo) {
 
     default: {
       sessione.step = 'chiedi_modello';
-      await inviaMessaggioWhatsApp(telefono, 'Dimmi pure il modello che ti interessa.');
+      await inviaMessaggioWhatsApp(telefono, 'Decime el modelo que te interesa.');
     }
   }
 }
@@ -140,12 +146,14 @@ async function gestisciMessaggio(telefono, testo) {
 // -----------------------------------------------------------------
 async function cercaDisponibilita(modello, taglia) {
   const url = `${SHEETY_URL}?modello=${encodeURIComponent(modello)}&taglia=${encodeURIComponent(taglia)}`;
+  console.log('Interrogo Sheety:', url);
   const risposta = await fetch(url);
   if (!risposta.ok) {
     console.error('Errore Sheety:', risposta.status, await risposta.text());
     return null;
   }
   const dati = await risposta.json();
+  console.log('Risposta Sheety:', JSON.stringify(dati));
   const righe = dati.inventario || [];
   return righe[0] || null; // prendiamo la prima corrispondenza
 }
@@ -155,7 +163,7 @@ async function cercaDisponibilita(modello, taglia) {
 // -----------------------------------------------------------------
 async function inviaMessaggioWhatsApp(telefono, testo) {
   const url = `https://graph.facebook.com/v20.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
-  await fetch(url, {
+  const risposta = await fetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${WHATSAPP_TOKEN}`,
@@ -168,6 +176,12 @@ async function inviaMessaggioWhatsApp(telefono, testo) {
       text: { body: testo },
     }),
   });
+  const corpo = await risposta.text();
+  if (!risposta.ok) {
+    console.error(`Errore invio WhatsApp (status ${risposta.status}):`, corpo);
+  } else {
+    console.log('Messaggio WhatsApp inviato correttamente:', corpo);
+  }
 }
 
 // -----------------------------------------------------------------
